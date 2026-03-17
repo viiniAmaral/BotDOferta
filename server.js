@@ -309,16 +309,15 @@ async function locateProductBbox(apiKey, mimeType, base64, productName) {
       headers: { "content-type": "application/json", "authorization": `Bearer ${apiKey}` },
       body: JSON.stringify({
         model: "meta-llama/llama-4-scout-17b-16e-instruct",
-        max_tokens: 100,
+        max_tokens: 60,
         temperature: 0,
         messages: [{
           role: "user",
           content: [
             { type: "image_url", image_url: { url: `data:${mimeType};base64,${base64}` } },
-            { type: "text", text: `Nesta imagem de folheto de supermercado, encontre o produto: "${productName}".
-Retorne APENAS um JSON com as coordenadas proporcionais (0.0 a 1.0) da FOTO do produto (nao do preco):
-{"bbox":[x1,y1,x2,y2]}
-Se nao encontrar: {"bbox":[0,0,0,0]}` }
+            { type: "text", text: `Find the product "${productName}" in this supermarket flyer image.
+Reply with ONLY 4 decimal numbers separated by commas (x1,y1,x2,y2) representing the proportional coordinates (0.0 to 1.0) of the product PHOTO (not the price). Example: 0.05,0.30,0.45,0.65
+If not found, reply: 0,0,0,0` }
           ]
         }]
       })
@@ -326,21 +325,28 @@ Se nao encontrar: {"bbox":[0,0,0,0]}` }
     if (!res.ok) return null;
     const data = await res.json();
     const raw  = (data.choices?.[0]?.message?.content || "").trim();
-    const s = raw.indexOf("{"), e = raw.lastIndexOf("}");
-    if (s === -1 || e === -1) return null;
-    // Pre-clean stray quotes inside number arrays: 0.708" → 0.708
-    const cleanRaw = raw.substring(s, e + 1)
-      .replace(/(\d)"(\s*[,\]])/g, '$1$2')
-      .replace(/(\d)"(\s*})/g,     '$1$2');
-    const parsed = JSON.parse(cleanRaw);
-    const bbox = parsed.bbox;
-    if (!Array.isArray(bbox) || bbox.length !== 4) return null;
-    const [x1, y1, x2, y2] = bbox.map(Number);
+    console.log(`  [locate] resposta raw: "${raw}"`);
+
+    // Extract 4 numbers from anywhere in the response — works regardless of format
+    const nums = raw.match(/[-+]?[0-9]*\.?[0-9]+/g);
+    if (!nums || nums.length < 4) {
+      console.warn(`  [locate] não encontrou 4 números na resposta`);
+      return null;
+    }
+    const [x1, y1, x2, y2] = nums.slice(0, 4).map(Number);
+    if (x1 === 0 && y1 === 0 && x2 === 0 && y2 === 0) return null;
     if ((x2 - x1) < 0.05 || (y2 - y1) < 0.05) return null;
-    console.log(`  [locate] ✅ bbox encontrado: [${bbox.join(",")}]`);
+    // Clamp to 0-1
+    const bbox = [
+      Math.max(0, Math.min(1, x1)),
+      Math.max(0, Math.min(1, y1)),
+      Math.max(0, Math.min(1, x2)),
+      Math.max(0, Math.min(1, y2)),
+    ];
+    console.log(`  [locate] ✅ bbox: [${bbox.join(",")}]`);
     return bbox;
   } catch(err) {
-    console.warn(`  [locate] falhou: ${err.message}`);
+    console.warn(`  [locate] erro: ${err.message}`);
     return null;
   }
 }
