@@ -113,21 +113,12 @@ async function cropProductImage(tileBuffer, tileW, tileH, bbox) {
       return null;
     }
 
-    // Detect if bbox is pointing to a small price-tag area (narrow height < 20% of image)
-    // In Brazilian supermarket flyers, product photos are typically in the top 60% of each card
-    // and price tags are in the bottom 40%. If bbox is small and in the lower portion,
-    // expand it upward to capture the product photo above.
-    const bboxH = y2r - y1r;
-    const bboxW = x2r - x1r;
-    if (bboxH < 0.20 && y1r > 0.30) {
-      // Looks like a price tag — expand upward to include the product photo
-      const centerX = (x1r + x2r) / 2;
-      const halfW   = Math.max(bboxW, 0.25) / 2;
-      x1r = Math.max(0, centerX - halfW);
-      x2r = Math.min(1, centerX + halfW);
-      y2r = Math.min(1, y1r + bboxH);       // keep bottom where it was
-      y1r = Math.max(0, y1r - bboxH * 3);   // expand upward 3x the bbox height
-    }
+    // In Brazilian supermarket flyers the product PHOTO is always in the top ~55%
+    // of the card and the PRICE is in the bottom ~45%.
+    // We always crop only the top 60% of whatever bbox the model gives us —
+    // this reliably captures the photo and avoids the price tag.
+    const cardH = y2r - y1r;
+    y2r = y1r + cardH * 0.60;   // keep only top 60% of card height
 
     // Add 2% padding
     const pad = 0.02;
@@ -185,10 +176,10 @@ Regras:
 - promo: texto de promocao se houver, como "Leve 3 Pague 2". Senao, use "".
 - bbox: [x1, y1, x2, y2] coordenadas proporcionais (0.0 a 1.0) da FOTO/IMAGEM DO PRODUTO (nao do preco, nao do nome — apenas a foto do item). x1,y1 = canto superior esquerdo da foto. x2,y2 = canto inferior direito da foto. Se nao houver foto clara, use [0,0,0,0].
 
-Formato de resposta (JSON puro, sem texto antes ou depois, sem markdown):
-{"items":[{"name":"Arroz Tio Joao 5kg","price":"R$ 22,90","original":"R$ 29,90","category":"Graos","promo":"","bbox":[0.0,0.2,0.5,0.5]},{"name":"Frango Inteiro Sadia 1kg","price":"R$ 12,99","original":"R$ 17,99","category":"Aves","promo":"","bbox":[0.5,0.2,1.0,0.5]}]}
+IMPORTANTE: retorne JSON COMPACTO em UMA UNICA LINHA, sem espacos, sem quebras de linha:
+{"items":[{"name":"Arroz Tio Joao 5kg","price":"R$ 22,90","original":"R$ 29,90","category":"Graos","promo":"","bbox":[0.0,0.2,0.5,0.5]}]}
 
-Se nao houver produtos com preco visivel: {"items":[]}`;
+Se nao houver produtos: {"items":[]}`;
 }
 
 // Modelos com suporte a visão, em ordem de preferência
@@ -257,15 +248,75 @@ function extractItems(raw, tileIdx) {
     console.log(`[tile ${tileIdx}] ✅ ${cleaned.length} produtos`);
     return cleaned;
   } catch(e) {
-    // Last resort: try to extract individual item objects with regex
-    console.warn(`[tile ${tileIdx}] Parse falhou, tentando extração parcial...`);
-    const matches = raw.matchAll(/"name"\s*:\s*"([^"]+)"[^}]+"price"\s*:\s*"([^"]+)"/g);
+    console.warn(`[tile ${tileIdx}] JSON completo falhou (${e.message}), tentando recuperar itens completos...`);
+    // Try to recover complete item objects from truncated/malformed JSON
+    // Match each complete {...} object that has at least name and price
     const items = [];
-    for (const m of matches) {
-      items.push({ name: m[1], price: m[2], original: "", category: "Mercearia", promo: "", bbox: [] });
+    const itemRe = /\{[^{}]*"name"\s*:\s*"([^"]+)"[^{}]*"price"\s*:\s*"([^"]+)"[^{}]*\}/g;
+    let m;
+    while ((m = itemRe.exec(raw)) !== null) {
+      try {
+        // Try to parse the full item object
+        const obj = JSON.parse(m[0].replace(/,\s*$/, '').replace(/:\s*,/g, ':"",'));
+        if (obj.name && obj.price) {
+          items.push({
+            name:     obj.name     || "",
+            price:    obj.price    || "",
+            original: obj.original || "",
+            category: obj.category || "Mercearia",
+            promo:    obj.promo    || "",
+            bbox:     Array.isArray(obj.bbox) && obj.bbox.length === 4 ? obj.bbox : [],
+          });
+        }
+      } catch(_) {
+        // If full object parse fails, use just name+price from regex
+        items.push({ name: m[1], price: m[2], original: "", category: "Mercearia", promo: "", bbox: [] });
+      }
     }
-    console.log(`[tile ${tileIdx}] Extração parcial: ${items.length} produtos`);
+    console.log(`[tile ${tileIdx}] Recuperação: ${items.length} produtos`);
     return items;
+  }
+}
+
+
+// ── Localiza um produto específico na imagem quando bbox está ausente ──────────
+async function locateProductBbox(apiKey, mimeType, base64, productName) {
+  try {
+    console.log(`  [locate] Buscando bbox de "${productName}"...`);
+    const res = await fetch("https://api.groq.com/openai/v1/chat/completions", {
+      method: "POST",
+      headers: { "content-type": "application/json", "authorization": `Bearer ${apiKey}` },
+      body: JSON.stringify({
+        model: "meta-llama/llama-4-scout-17b-16e-instruct",
+        max_tokens: 100,
+        temperature: 0,
+        messages: [{
+          role: "user",
+          content: [
+            { type: "image_url", image_url: { url: `data:${mimeType};base64,${base64}` } },
+            { type: "text", text: `Nesta imagem de folheto de supermercado, encontre o produto: "${productName}".
+Retorne APENAS um JSON com as coordenadas proporcionais (0.0 a 1.0) da FOTO do produto (nao do preco):
+{"bbox":[x1,y1,x2,y2]}
+Se nao encontrar: {"bbox":[0,0,0,0]}` }
+          ]
+        }]
+      })
+    });
+    if (!res.ok) return null;
+    const data = await res.json();
+    const raw  = (data.choices?.[0]?.message?.content || "").trim();
+    const s = raw.indexOf("{"), e = raw.lastIndexOf("}");
+    if (s === -1 || e === -1) return null;
+    const parsed = JSON.parse(raw.substring(s, e + 1));
+    const bbox = parsed.bbox;
+    if (!Array.isArray(bbox) || bbox.length !== 4) return null;
+    const [x1, y1, x2, y2] = bbox.map(Number);
+    if ((x2 - x1) < 0.05 || (y2 - y1) < 0.05) return null;
+    console.log(`  [locate] ✅ bbox encontrado: [${bbox.join(",")}]`);
+    return bbox;
+  } catch(err) {
+    console.warn(`  [locate] falhou: ${err.message}`);
+    return null;
   }
 }
 
@@ -298,24 +349,27 @@ async function analyzeTile(tile, mimeType, apiKey) {
 
   const items = extractItems(raw, tile.index + 1);
 
-  // Crop images for each item
+  // Crop images for each item — with fallback bbox locate
   return Promise.all(items.map(async item => {
     let image = null;
-    const bbox = item.bbox;
+    let bbox  = Array.isArray(item.bbox) && item.bbox.length === 4 ? item.bbox : null;
     console.log(`  [crop] "${item.name}" bbox=${JSON.stringify(bbox)}`);
 
-    if (!Array.isArray(bbox) || bbox.length !== 4) {
-      console.warn(`  [crop] bbox inválido para "${item.name}"`);
-    } else {
+    // If bbox is missing or zero, ask Groq to locate this specific product
+    if (!bbox || (bbox[2] - bbox[0]) < 0.05 || (bbox[3] - bbox[1]) < 0.05) {
+      bbox = await locateProductBbox(apiKey, mimeType, tile.base64, item.name);
+    }
+
+    if (bbox) {
       const [x1, y1, x2, y2] = bbox.map(Number);
       const w = x2 - x1, h = y2 - y1;
       console.log(`  [crop] w=${w.toFixed(3)} h=${h.toFixed(3)} tile=${tile.width}x${tile.height}`);
       if (w > 0.02 && h > 0.02) {
         image = await cropProductImage(tile.buffer, tile.width, tile.height, bbox);
-        console.log(`  [crop] resultado: ${image ? "✅ imagem gerada (" + image.length + " chars)" : "❌ null"}`);
-      } else {
-        console.warn(`  [crop] bbox muito pequeno (${w.toFixed(3)}x${h.toFixed(3)}), pulando`);
+        console.log(`  [crop] resultado: ${image ? "✅ (" + image.length + " chars)" : "❌ null"}`);
       }
+    } else {
+      console.warn(`  [crop] sem bbox para "${item.name}", sem imagem`);
     }
     return { ...item, image };
   }));
