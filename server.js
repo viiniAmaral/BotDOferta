@@ -103,12 +103,28 @@ async function splitImageToTiles(buffer) {
 async function cropProductImage(tileBuffer, tileW, tileH, bbox) {
   try {
     const sharp = require("sharp");
-    const [x1r, y1r, x2r, y2r] = bbox.map(v => Math.min(1, Math.max(0, Number(v) || 0)));
+    let [x1r, y1r, x2r, y2r] = bbox.map(v => Math.min(1, Math.max(0, Number(v) || 0)));
 
     // Skip zero or near-zero bboxes
     if ((x2r - x1r) < 0.05 || (y2r - y1r) < 0.05) return null;
 
-    // Add 2% padding around the product
+    // Detect if bbox is pointing to a small price-tag area (narrow height < 20% of image)
+    // In Brazilian supermarket flyers, product photos are typically in the top 60% of each card
+    // and price tags are in the bottom 40%. If bbox is small and in the lower portion,
+    // expand it upward to capture the product photo above.
+    const bboxH = y2r - y1r;
+    const bboxW = x2r - x1r;
+    if (bboxH < 0.20 && y1r > 0.30) {
+      // Looks like a price tag — expand upward to include the product photo
+      const centerX = (x1r + x2r) / 2;
+      const halfW   = Math.max(bboxW, 0.25) / 2;
+      x1r = Math.max(0, centerX - halfW);
+      x2r = Math.min(1, centerX + halfW);
+      y2r = Math.min(1, y1r + bboxH);       // keep bottom where it was
+      y1r = Math.max(0, y1r - bboxH * 3);   // expand upward 3x the bbox height
+    }
+
+    // Add 2% padding
     const pad = 0.02;
     const px1 = Math.max(0, x1r - pad);
     const py1 = Math.max(0, y1r - pad);
@@ -120,7 +136,6 @@ async function cropProductImage(tileBuffer, tileW, tileH, bbox) {
     const width  = Math.max(20, Math.floor((px2 - px1) * tileW));
     const height = Math.max(20, Math.floor((py2 - py1) * tileH));
 
-    // Ensure we stay within bounds
     const safeW = Math.min(width,  tileW - left);
     const safeH = Math.min(height, tileH - top);
     if (safeW < 10 || safeH < 10) return null;
@@ -152,7 +167,7 @@ Regras:
 - original: preco anterior riscado. Se nao visivel, use "".
 - category: uma de Carnes, Aves, Peixes, Frios, Laticinios, Padaria, Graos, Hortifruti, Bebidas, Cervejas, Higiene, Limpeza, Congelados, Mercearia, Outros
 - promo: texto de promocao se houver, como "Leve 3 Pague 2". Senao, use "".
-- bbox: [x1, y1, x2, y2] onde cada valor e a posicao proporcional (0.0 a 1.0) do card do produto na imagem. x1,y1 = canto superior esquerdo. x2,y2 = canto inferior direito.
+- bbox: [x1, y1, x2, y2] coordenadas proporcionais (0.0 a 1.0) da FOTO/IMAGEM DO PRODUTO (nao do preco, nao do nome — apenas a foto do item). x1,y1 = canto superior esquerdo da foto. x2,y2 = canto inferior direito da foto. Se nao houver foto clara, use [0,0,0,0].
 
 Formato de resposta (JSON puro, sem texto antes ou depois, sem markdown):
 {"items":[{"name":"Arroz Tio Joao 5kg","price":"R$ 22,90","original":"R$ 29,90","category":"Graos","promo":"","bbox":[0.0,0.2,0.5,0.5]},{"name":"Frango Inteiro Sadia 1kg","price":"R$ 12,99","original":"R$ 17,99","category":"Aves","promo":"","bbox":[0.5,0.2,1.0,0.5]}]}
@@ -209,15 +224,19 @@ function extractItems(raw, tileIdx) {
   try {
     const parsed = JSON.parse(raw.substring(start, end + 1));
     const items  = parsed.items || [];
-    // Sanitize names - remove placeholder text and garbage
-    const cleaned = items.filter(i => i.name && i.price).map(i => ({
-      ...i,
-      name: i.name
-        .replace(/^(marca\s*\+?\s*|produto\s*\+?\s*|quantidade\s*\+?\s*)+/gi, '')
+    // Sanitize names - decode unicode escapes and remove placeholder text
+    const cleaned = items.filter(i => i.name && i.price).map(i => {
+      let name = i.name;
+      // Decode unicode escapes like \u00e3 → ã
+      try { name = JSON.parse('"' + name.replace(/"/g, '\\"') + '"'); } catch(_) {}
+      // Remove placeholder text the model sometimes copies literally
+      name = name
+        .replace(/marca\s*\+?\s*produto\s*\+?\s*quantidade/gi, '')
         .replace(/\s*\+\s*(marca|produto|quantidade)\s*/gi, '')
         .replace(/^[\s\-\+]+|[\s\-\+]+$/g, '')
-        .trim(),
-    })).filter(i => i.name.length > 2);
+        .trim();
+      return { ...i, name };
+    }).filter(i => i.name.length > 2);
     console.log(`[tile ${tileIdx}] ✅ ${cleaned.length} produtos`);
     return cleaned;
   } catch(e) {
