@@ -1258,6 +1258,12 @@ function render() {
     return;
   }
 
+  // ── MERCADOS ──────────────────────────────────────────────────────────────
+  if (S.tab === "stores") {
+    renderStores();
+    return;
+  }
+
   // ── ADICIONAR ─────────────────────────────────────────────────────────────
   const todayISO = new Date().toISOString().split('T')[0];
 
@@ -1351,43 +1357,71 @@ function setPeriodType(type, updateEnd = true) {
 // ── Stores tab render ────────────────────────────────────────────────────────
 function renderStores() {
   const STORE_COLORS = ["#1f7a4a","#2563eb","#e63946","#f59e0b","#8b5cf6","#ec4899","#06b6d4","#f97316","#14b8a6","#84cc16"];
+  const cnt = document.getElementById("cnt");
+  if (!cnt) return;
 
-  const storeList = S.stores.length
-    ? S.stores.map(s => {
-        const initial = s.name.charAt(0).toUpperCase();
-        const count   = S.markets.filter(m => m.market === s.name).length;
-        return `<div class="store-card">
-          <div class="store-avatar" style="background:${s.color}18;color:${s.color};border:1.5px solid ${s.color}30">${initial}</div>
-          <div>
-            <div class="store-name">${esc(s.name)}</div>
-            <div class="store-meta">${count} folheto${count!==1?"s":""} cadastrado${count!==1?"s":""}</div>
-          </div>
-          <div class="store-actions">
-            <button class="store-del" onclick="deleteStore(${s.id},'${escQ(s.name)}')">Remover</button>
-          </div>
-        </div>`;
-      }).join("")
-    : `<div class="empty" style="padding:32px 0"><div class="empty-icon">🏪</div><h3>Nenhum mercado ainda</h3><p>Cadastre o primeiro mercado abaixo</p></div>`;
+  // Build store list HTML
+  let storeListHtml = "";
+  if (S.stores.length) {
+    storeListHtml = S.stores.map(s => {
+      const initial = s.name.charAt(0).toUpperCase();
+      const count   = S.markets.filter(m => m.market === s.name).length;
+      return `<div class="store-card">
+        <div class="store-avatar" style="background:${s.color}18;color:${s.color};border:1.5px solid ${s.color}30">${initial}</div>
+        <div style="flex:1">
+          <div class="store-name">${esc(s.name)}</div>
+          <div class="store-meta">${count} folheto${count!==1?"s":""} cadastrado${count!==1?"s":""}</div>
+        </div>
+        <div class="store-actions">
+          <button class="store-del" onclick="deleteStore(${s.id},'${escQ(s.name)}')">Remover</button>
+        </div>
+      </div>`;
+    }).join("");
+  } else {
+    storeListHtml = `<div style="text-align:center;padding:24px 0;color:var(--t3);font-size:13px">
+      Nenhum mercado cadastrado ainda — adicione o primeiro abaixo 👇
+    </div>`;
+  }
 
-  const colorDots = STORE_COLORS.map((c,i) =>
+  // Build color dots
+  const colorDots = STORE_COLORS.map((c, i) =>
     `<div class="color-dot${i===0?" on":""}" data-color="${c}" style="background:${c}" onclick="selectStoreColor(this,'${c}')"></div>`
   ).join("");
 
-  document.getElementById("cnt").innerHTML = `
-    <div style="margin-bottom:22px">
-      <div class="store-grid">${storeList}</div>
+  cnt.innerHTML = `
+    <div style="margin-bottom:20px">
+      <div class="store-grid">${storeListHtml}</div>
     </div>
     <div class="add-store-form">
       <div class="add-store-title">Cadastrar Mercado</div>
       <label class="date-label">Nome do mercado <span style="color:var(--red)">*</span></label>
-      <input class="mkt-inp" id="store-name" placeholder="Ex: Condor, Atacadão, Dia..." style="margin-bottom:4px" oninput="clearStoreErr()"/>
+      <input
+        class="mkt-inp"
+        id="store-name"
+        placeholder="Ex: Condor, Atacadão, Dia..."
+        style="margin-bottom:4px"
+        oninput="clearStoreErr()"
+        onkeydown="if(event.key==='Enter')saveStore()"
+      />
       <div class="field-err" id="err-store-name" style="margin-bottom:10px">Informe o nome do mercado</div>
       <label class="date-label" style="margin-bottom:8px">Cor do mercado</label>
       <div class="color-row" id="color-row">${colorDots}</div>
-      <button onclick="saveStore()" style="width:100%;padding:13px;background:linear-gradient(135deg,var(--em),#155c36);border:none;border-radius:var(--r-md);font-size:14px;font-weight:600;color:#fff;cursor:pointer;transition:all .2s" onmouseover="this.style.transform='translateY(-1px)'" onmouseout="this.style.transform='translateY(0)'">
-        Cadastrar Mercado
+      <button
+        onclick="saveStore()"
+        style="width:100%;padding:13px;background:linear-gradient(135deg,var(--em),#155c36);border:none;border-radius:var(--r-md);font-size:14px;font-weight:600;color:#fff;cursor:pointer;transition:all .2s;margin-top:4px"
+        onmouseover="this.style.transform='translateY(-1px)';this.style.boxShadow='0 8px 24px #1f7a4a28'"
+        onmouseout="this.style.transform='';this.style.boxShadow=''"
+      >
+        + Cadastrar Mercado
       </button>
     </div>`;
+
+  // Restore selected color highlight after re-render
+  const dots = document.querySelectorAll(".color-dot");
+  dots.forEach(d => {
+    if (d.dataset.color === _selectedStoreColor) d.classList.add("on");
+    else d.classList.remove("on");
+  });
 }
 
 let _selectedStoreColor = "#1f7a4a";
