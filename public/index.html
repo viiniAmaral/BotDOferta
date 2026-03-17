@@ -809,6 +809,88 @@
     .inp-err { border-color:var(--red) !important; box-shadow:0 0 0 3px #d9302514 !important; }
     .required-hint { font-size:10px; color:var(--t4); font-family:'DM Mono',monospace; margin-bottom:14px; }
     .required-hint span { color:var(--red); }
+
+    /* ── FOLHETOS MANAGEMENT ────────────────────────────── */
+    .folheto-filters {
+      display:flex; gap:8px; margin-bottom:18px; flex-wrap:wrap; align-items:center;
+    }
+    .folheto-filter-btn {
+      padding:6px 14px; border-radius:20px; font-size:12px; font-weight:500;
+      border:1px solid var(--bg3); background:var(--bg2); color:var(--t3);
+      transition:all .15s; cursor:pointer;
+    }
+    .folheto-filter-btn.on { background:#1f7a4a0e; border-color:#1f7a4a30; color:var(--em); }
+    .folheto-search {
+      flex:1; min-width:160px; padding:8px 13px;
+      background:var(--bg1); border:1px solid var(--bg3);
+      border-radius:var(--r-md); font-size:13px; color:var(--t0);
+      outline:none; transition:border-color .2s;
+    }
+    .folheto-search:focus { border-color:var(--em); }
+    .folheto-search::placeholder { color:var(--t4); }
+
+    .folheto-list { display:flex; flex-direction:column; gap:10px; }
+    .folheto-card {
+      background:var(--bg1); border:1px solid var(--bg3);
+      border-radius:var(--r-lg); padding:16px 18px;
+      display:flex; align-items:center; gap:14px;
+      box-shadow:0 1px 3px #0f1f0f06; transition:all .15s;
+    }
+    .folheto-card:hover { border-color:#1f7a4a20; box-shadow:0 2px 12px #0f1f0f0a; }
+    .folheto-card.empty-card { border-color:#d9302520; background:#d9302504; }
+    .folheto-avatar {
+      width:46px; height:46px; border-radius:12px; flex-shrink:0;
+      display:flex; align-items:center; justify-content:center;
+      font-family:'Fraunces',serif; font-size:18px; font-weight:700;
+    }
+    .folheto-info { flex:1; min-width:0; }
+    .folheto-market { font-size:14px; font-weight:600; color:var(--t0); margin-bottom:3px; }
+    .folheto-period {
+      font-size:11px; color:var(--t3); font-family:'DM Mono',monospace;
+      display:flex; align-items:center; gap:6px; flex-wrap:wrap;
+    }
+    .folheto-badge {
+      display:inline-flex; align-items:center; gap:4px;
+      padding:2px 8px; border-radius:20px;
+      font-size:10px; font-weight:600; font-family:'DM Mono',monospace;
+    }
+    .badge-ok    { background:#1f7a4a0e; color:var(--em); border:1px solid #1f7a4a20; }
+    .badge-empty { background:#d9302510; color:var(--red); border:1px solid #d9302530; }
+    .badge-week  { background:#2563eb0e; color:#2563eb;   border:1px solid #2563eb25; }
+    .folheto-items-count {
+      font-size:13px; font-weight:700; color:var(--t2);
+      font-family:'DM Mono',monospace; text-align:center;
+      flex-shrink:0; min-width:52px;
+    }
+    .folheto-items-count small { display:block; font-size:9px; font-weight:400; color:var(--t4); margin-top:1px; }
+    .folheto-del {
+      flex-shrink:0; padding:7px 12px; border-radius:var(--r-md);
+      font-size:12px; font-weight:500; color:var(--t4);
+      border:1px solid var(--bg3); background:var(--bg2);
+      transition:all .15s;
+    }
+    .folheto-del:hover { color:var(--red); border-color:#d9302530; background:#d9302508; }
+
+    .folheto-summary {
+      display:flex; gap:12px; margin-bottom:18px; flex-wrap:wrap;
+    }
+    .summary-card {
+      flex:1; min-width:120px;
+      background:var(--bg1); border:1px solid var(--bg3);
+      border-radius:var(--r-lg); padding:14px 16px;
+      box-shadow:0 1px 3px #0f1f0f06;
+    }
+    .summary-val  { font-family:'Fraunces',serif; font-size:24px; font-weight:600; color:var(--t0); letter-spacing:-.02em; }
+    .summary-lbl  { font-size:11px; color:var(--t3); margin-top:2px; font-family:'DM Mono',monospace; }
+
+    .bulk-del-btn {
+      padding:8px 16px; border-radius:var(--r-md);
+      font-size:12px; font-weight:600;
+      background:#d9302510; border:1px solid #d9302530; color:var(--red);
+      transition:all .15s; white-space:nowrap;
+    }
+    .bulk-del-btn:hover { background:#d9302520; }
+    .bulk-del-btn:disabled { opacity:.4; cursor:not-allowed; }
     /* ══════════════════════════════════════════════
        RESPONSIVE
     ══════════════════════════════════════════════ */
@@ -872,6 +954,7 @@
     <button class="tab-item"     id="tab-comparar"  onclick="setTab('comparar')">Comparar</button>
     <button class="tab-item"     id="tab-add"       onclick="setTab('add')">+ Adicionar</button>
     <button class="tab-item"     id="tab-stores"    onclick="setTab('stores')">🏪 Mercados</button>
+    <button class="tab-item"     id="tab-folhetos"  onclick="setTab('folhetos')">📋 Folhetos</button>
   </div>
 
   <div class="main">
@@ -971,7 +1054,7 @@ function setSyncBadge(type, msg) {
 // ── Tabs ──────────────────────────────────────────────────────────────────────
 function setTab(t) {
   S.tab = t;
-  ["hoje","historico","comparar","add","stores"].forEach(id => {
+  ["hoje","historico","comparar","add","stores","folhetos"].forEach(id => {
     document.getElementById("tab-"+id).className = "tab-item" + (id === t ? " on" : "");
   });
   render();
@@ -1258,6 +1341,12 @@ function render() {
     return;
   }
 
+  // ── FOLHETOS ──────────────────────────────────────────────────────────────
+  if (S.tab === "folhetos") {
+    renderFolhetos();
+    return;
+  }
+
   // ── MERCADOS ──────────────────────────────────────────────────────────────
   if (S.tab === "stores") {
     renderStores();
@@ -1352,6 +1441,144 @@ function setPeriodType(type, updateEnd = true) {
       endInp.value = d.toISOString().split('T')[0];
     }
   }
+}
+
+
+// ── Folhetos Management ───────────────────────────────────────────────────────
+let _folhetoFilter = "todos";   // todos | ok | empty
+let _folhetoSearch = "";
+
+function renderFolhetos() {
+  const cnt = document.getElementById("cnt");
+  if (!cnt) return;
+
+  // Apply filters
+  let list = [...S.markets];
+
+  if (_folhetoSearch) {
+    const q = _folhetoSearch.toLowerCase();
+    list = list.filter(m => m.market.toLowerCase().includes(q));
+  }
+  if (_folhetoFilter === "ok")    list = list.filter(m => m.items.length > 0);
+  if (_folhetoFilter === "empty") list = list.filter(m => m.items.length === 0);
+
+  // Sort: newest first
+  list.sort((a, b) => {
+    const da = a.date.split("/").reverse().join(""), db = b.date.split("/").reverse().join("");
+    return db.localeCompare(da);
+  });
+
+  // Summary stats
+  const total   = S.markets.length;
+  const empty   = S.markets.filter(m => m.items.length === 0).length;
+  const prods   = S.markets.reduce((a, m) => a + m.items.length, 0);
+  const stores  = [...new Set(S.markets.map(m => m.market))].length;
+
+  const summaryHtml = `
+    <div class="folheto-summary">
+      <div class="summary-card">
+        <div class="summary-val">${total}</div>
+        <div class="summary-lbl">📋 folhetos</div>
+      </div>
+      <div class="summary-card">
+        <div class="summary-val">${prods}</div>
+        <div class="summary-lbl">🏷️ produtos</div>
+      </div>
+      <div class="summary-card">
+        <div class="summary-val" style="color:${empty>0?'var(--red)':'var(--em)'}">${empty}</div>
+        <div class="summary-lbl">⚠️ sem itens</div>
+      </div>
+      <div class="summary-card">
+        <div class="summary-val">${stores}</div>
+        <div class="summary-lbl">🏪 mercados</div>
+      </div>
+    </div>`;
+
+  // Filter bar
+  const filtersHtml = `
+    <div class="folheto-filters">
+      <input class="folheto-search" id="folheto-srch" placeholder="🔍 Buscar mercado..."
+        value="${esc(_folhetoSearch)}" oninput="_folhetoSearch=this.value;renderFolhetos()"/>
+      <button class="folheto-filter-btn${_folhetoFilter==='todos'?' on':''}" onclick="_folhetoFilter='todos';renderFolhetos()">
+        Todos (${total})
+      </button>
+      <button class="folheto-filter-btn${_folhetoFilter==='ok'?' on':''}" onclick="_folhetoFilter='ok';renderFolhetos()">
+        ✅ Com itens (${total-empty})
+      </button>
+      <button class="folheto-filter-btn${_folhetoFilter==='empty'?' on':''}" onclick="_folhetoFilter='empty';renderFolhetos()">
+        ⚠️ Sem itens (${empty})
+      </button>
+      ${empty > 0 ? `<button class="bulk-del-btn" onclick="deleteAllEmpty()">🗑️ Excluir todos sem itens</button>` : ''}
+    </div>`;
+
+  // Folheto cards
+  let listHtml = "";
+  if (!list.length) {
+    listHtml = `<div class="empty"><div class="empty-icon">📋</div>
+      <h3>Nenhum folheto encontrado</h3>
+      <p>Tente ajustar o filtro ou a busca</p></div>`;
+  } else {
+    listHtml = `<div class="folheto-list">${list.map(m => {
+      const isEmpty  = m.items.length === 0;
+      const isWeek   = !!m.date_end;
+      const period   = isWeek ? `${m.date} → ${m.date_end}` : m.date;
+      const initial  = m.market.charAt(0).toUpperCase();
+      return `<div class="folheto-card${isEmpty?' empty-card':''}">
+        <div class="folheto-avatar" style="background:${m.color}18;color:${m.color};border:1.5px solid ${m.color}28">
+          ${initial}
+        </div>
+        <div class="folheto-info">
+          <div class="folheto-market">${esc(m.market)}</div>
+          <div class="folheto-period">
+            📅 ${period}
+            ${isWeek ? `<span class="folheto-badge badge-week">Por período</span>` : ''}
+            ${isEmpty
+              ? `<span class="folheto-badge badge-empty">⚠️ Sem itens</span>`
+              : `<span class="folheto-badge badge-ok">✅ ${m.items.length} itens</span>`}
+          </div>
+        </div>
+        <div class="folheto-items-count">
+          ${m.items.length}
+          <small>itens</small>
+        </div>
+        <button class="folheto-del" onclick="deleteFolheto(${m.id}, '${escQ(m.market)}', '${escQ(period)}')">
+          🗑️ Excluir
+        </button>
+      </div>`;
+    }).join("")}</div>`;
+  }
+
+  cnt.innerHTML = summaryHtml + filtersHtml + listHtml;
+}
+
+async function deleteFolheto(id, market, period) {
+  if (!confirm(`Excluir folheto de "${market}" (${period})?\nTodos os produtos serão removidos.`)) return;
+  try {
+    await fetch(`/api/markets/${id}`, { method: "DELETE" });
+    S.markets = S.markets.filter(m => m.id !== id);
+    const tot = S.markets.reduce((a, m) => a + m.items.length, 0);
+    setSyncBadge("ok", `✅ ${S.markets.length} folhetos · ${tot} produtos · ${S.stores.length} mercados`);
+    toast(`🗑️ Folheto de ${market} excluído`);
+    renderFolhetos();
+  } catch(e) { toast("⚠️ Erro ao excluir"); }
+}
+
+async function deleteAllEmpty() {
+  const empties = S.markets.filter(m => m.items.length === 0);
+  if (!empties.length) return;
+  if (!confirm(`Excluir ${empties.length} folheto${empties.length>1?"s":""} sem itens?`)) return;
+  let deleted = 0;
+  for (const m of empties) {
+    try {
+      await fetch(`/api/markets/${m.id}`, { method: "DELETE" });
+      S.markets = S.markets.filter(x => x.id !== m.id);
+      deleted++;
+    } catch(_) {}
+  }
+  const tot = S.markets.reduce((a, m) => a + m.items.length, 0);
+  setSyncBadge("ok", `✅ ${S.markets.length} folhetos · ${tot} produtos · ${S.stores.length} mercados`);
+  toast(`🗑️ ${deleted} folheto${deleted>1?"s":""} excluído${deleted>1?"s":""}`);
+  renderFolhetos();
 }
 
 // ── Stores tab render ────────────────────────────────────────────────────────
