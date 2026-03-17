@@ -103,38 +103,61 @@ async function splitImageToTiles(buffer) {
 async function cropProductImage(tileBuffer, tileW, tileH, bbox) {
   try {
     const sharp = require("sharp");
-    const [x1r,y1r,x2r,y2r] = bbox.map(v => Math.min(1, Math.max(0, v)));
-    const left   = Math.round(x1r * tileW);
-    const top    = Math.round(y1r * tileH);
-    const width  = Math.max(10, Math.round((x2r-x1r) * tileW));
-    const height = Math.max(10, Math.round((y2r-y1r) * tileH));
-    if (left+width > tileW || top+height > tileH) return null;
-    const padX = Math.round(width * 0.03), padY = Math.round(height * 0.03);
-    const safeL = Math.max(0, left-padX), safeT = Math.max(0, top-padY);
-    const safeW = Math.min(tileW-safeL, width+padX*2);
-    const safeH = Math.min(tileH-safeT, height+padY*2);
+    const [x1r, y1r, x2r, y2r] = bbox.map(v => Math.min(1, Math.max(0, Number(v) || 0)));
+
+    // Skip zero or near-zero bboxes
+    if ((x2r - x1r) < 0.05 || (y2r - y1r) < 0.05) return null;
+
+    // Add 2% padding around the product
+    const pad = 0.02;
+    const px1 = Math.max(0, x1r - pad);
+    const py1 = Math.max(0, y1r - pad);
+    const px2 = Math.min(1, x2r + pad);
+    const py2 = Math.min(1, y2r + pad);
+
+    const left   = Math.floor(px1 * tileW);
+    const top    = Math.floor(py1 * tileH);
+    const width  = Math.max(20, Math.floor((px2 - px1) * tileW));
+    const height = Math.max(20, Math.floor((py2 - py1) * tileH));
+
+    // Ensure we stay within bounds
+    const safeW = Math.min(width,  tileW - left);
+    const safeH = Math.min(height, tileH - top);
+    if (safeW < 10 || safeH < 10) return null;
+
     const cropped = await sharp(tileBuffer)
-      .extract({ left: safeL, top: safeT, width: safeW, height: safeH })
+      .extract({ left, top, width: safeW, height: safeH })
       .resize({ width: 300, withoutEnlargement: true })
-      .jpeg({ quality: 82 })
+      .jpeg({ quality: 85 })
       .toBuffer();
+
     return "data:image/jpeg;base64," + cropped.toString("base64");
-  } catch(_) { return null; }
+  } catch(err) {
+    console.warn("cropProductImage error:", err.message);
+    return null;
+  }
 }
 
 function buildPrompt(index, total, row, col, cols, rows) {
   const pos = total > 1
-    ? `Seção ${index+1}/${total} de um folheto de supermercado brasileiro.`
+    ? `Secao ${index+1} de ${total} de um folheto de supermercado brasileiro.`
     : "Folheto de supermercado brasileiro.";
   return `${pos}
 
-Liste TODOS os produtos com preço visível. Para folhetos com "PAGUE APENAS" ou preço "CLIENTE", use o menor preço como "price". Inclua marca e gramatura no nome.
+Extraia todos os produtos com preco visivel e retorne JSON puro sem markdown.
 
-Responda SOMENTE com este JSON (sem markdown):
-{"items":[{"name":"marca + produto + quantidade","price":"R$ X,XX","original":"R$ X,XX","category":"Carnes|Aves|Peixes|Frios|Laticínios|Padaria|Graos|Hortifruti|Bebidas|Cervejas|Higiene|Limpeza|Congelados|Mercearia|Outros","promo":"ex: Leve 4 Pague 3 ou vazio","bbox":[x1,y1,x2,y2]}]}
+Regras:
+- name: nome real do produto com marca e quantidade. Exemplos: "Arroz Tio Joao 5kg", "Coca-Cola 2L", "Frango Inteiro Sadia 1kg"
+- price: preco promocional em destaque (ex: "R$ 8,99"). Se houver "PAGUE APENAS" ou preco de clube, use esse.
+- original: preco anterior riscado. Se nao visivel, use "".
+- category: uma de Carnes, Aves, Peixes, Frios, Laticinios, Padaria, Graos, Hortifruti, Bebidas, Cervejas, Higiene, Limpeza, Congelados, Mercearia, Outros
+- promo: texto de promocao se houver, como "Leve 3 Pague 2". Senao, use "".
+- bbox: [x1, y1, x2, y2] onde cada valor e a posicao proporcional (0.0 a 1.0) do card do produto na imagem. x1,y1 = canto superior esquerdo. x2,y2 = canto inferior direito.
 
-bbox = coordenadas do produto em proporção 0.0-1.0 [esquerda,cima,direita,baixo].
-Se não houver produtos: {"items":[]}`;
+Formato de resposta (JSON puro, sem texto antes ou depois, sem markdown):
+{"items":[{"name":"Arroz Tio Joao 5kg","price":"R$ 22,90","original":"R$ 29,90","category":"Graos","promo":"","bbox":[0.0,0.2,0.5,0.5]},{"name":"Frango Inteiro Sadia 1kg","price":"R$ 12,99","original":"R$ 17,99","category":"Aves","promo":"","bbox":[0.5,0.2,1.0,0.5]}]}
+
+Se nao houver produtos com preco visivel: {"items":[]}`;
 }
 
 // Modelos com suporte a visão, em ordem de preferência
@@ -186,8 +209,17 @@ function extractItems(raw, tileIdx) {
   try {
     const parsed = JSON.parse(raw.substring(start, end + 1));
     const items  = parsed.items || [];
-    console.log(`[tile ${tileIdx}] ✅ ${items.length} produtos`);
-    return items;
+    // Sanitize names - remove placeholder text and garbage
+    const cleaned = items.filter(i => i.name && i.price).map(i => ({
+      ...i,
+      name: i.name
+        .replace(/^(marca\s*\+?\s*|produto\s*\+?\s*|quantidade\s*\+?\s*)+/gi, '')
+        .replace(/\s*\+\s*(marca|produto|quantidade)\s*/gi, '')
+        .replace(/^[\s\-\+]+|[\s\-\+]+$/g, '')
+        .trim(),
+    })).filter(i => i.name.length > 2);
+    console.log(`[tile ${tileIdx}] ✅ ${cleaned.length} produtos`);
+    return cleaned;
   } catch(e) {
     // Last resort: try to extract individual item objects with regex
     console.warn(`[tile ${tileIdx}] Parse falhou, tentando extração parcial...`);
