@@ -137,60 +137,98 @@ bbox = coordenadas do produto em proporção 0.0-1.0 [esquerda,cima,direita,baix
 Se não houver produtos: {"items":[]}`;
 }
 
-async function analyzeTile(tile, mimeType, apiKey) {
-  console.log(`[tile ${tile.index+1}/${tile.total}] Enviando para Groq... (${tile.width}x${tile.height}px)`);
-  
-  const body = {
-    model: "meta-llama/llama-4-scout-17b-16e-instruct",
-    max_tokens: 4096,
-    temperature: 0.1,
-    messages: [
-      {
-        role: "user",
-        content: [
-          { type: "image_url", image_url: { url: `data:${mimeType};base64,${tile.base64}` } },
-          { type: "text", text: buildPrompt(tile.index, tile.total, tile.row, tile.col, tile.cols, tile.rows) }
-        ]
-      }
-    ]
-  };
+// Modelos com suporte a visão, em ordem de preferência
+const VISION_MODELS = [
+  "meta-llama/llama-4-scout-17b-16e-instruct",
+  "llama-3.2-90b-vision-preview",
+  "llama-3.2-11b-vision-preview",
+];
 
+async function callGroq(apiKey, model, mimeType, base64, promptText) {
   const res = await fetch("https://api.groq.com/openai/v1/chat/completions", {
     method: "POST",
     headers: { "content-type": "application/json", "authorization": `Bearer ${apiKey}` },
-    body: JSON.stringify(body)
+    body: JSON.stringify({
+      model,
+      max_tokens: 4096,
+      temperature: 0.1,
+      messages: [{
+        role: "user",
+        content: [
+          { type: "image_url", image_url: { url: `data:${mimeType};base64,${base64}` } },
+          { type: "text", text: promptText }
+        ]
+      }]
+    })
   });
 
   if (!res.ok) {
     const e = await res.json().catch(() => ({}));
-    const msg = e?.error?.message || `HTTP ${res.status}`;
-    console.error(`[tile ${tile.index+1}] ERRO Groq:`, msg);
-    throw new Error(msg);
+    throw new Error(e?.error?.message || `HTTP ${res.status}`);
   }
-
   const data = await res.json();
-  const raw  = data.choices?.[0]?.message?.content?.trim() || "";
-  console.log(`[tile ${tile.index+1}] Resposta (${raw.length} chars):`, raw.substring(0, 200));
+  return data.choices?.[0]?.message?.content?.trim() || "";
+}
 
-  if (!raw) { console.warn(`[tile ${tile.index+1}] Resposta vazia`); return []; }
+function extractItems(raw, tileIdx) {
+  if (!raw) { console.warn(`[tile ${tileIdx}] Resposta vazia`); return []; }
 
-  // Robust JSON extraction: find first { and last }
-  const jsonStart = raw.indexOf("{");
-  const jsonEnd   = raw.lastIndexOf("}");
-  if (jsonStart === -1 || jsonEnd === -1) {
-    console.warn(`[tile ${tile.index+1}] JSON não encontrado na resposta`);
+  console.log(`[tile ${tileIdx}] Resposta (${raw.length} chars): ${raw.substring(0, 150)}`);
+
+  // Find outermost JSON object
+  const start = raw.indexOf("{");
+  const end   = raw.lastIndexOf("}");
+  if (start === -1 || end === -1) {
+    console.warn(`[tile ${tileIdx}] JSON não encontrado`);
     return [];
   }
-  const jsonStr = raw.substring(jsonStart, jsonEnd + 1);
 
-  let items = [];
   try {
-    items = JSON.parse(jsonStr).items || [];
-    console.log(`[tile ${tile.index+1}] ✅ ${items.length} produtos extraídos`);
+    const parsed = JSON.parse(raw.substring(start, end + 1));
+    const items  = parsed.items || [];
+    console.log(`[tile ${tileIdx}] ✅ ${items.length} produtos`);
+    return items;
   } catch(e) {
-    console.error(`[tile ${tile.index+1}] Erro ao parsear JSON:`, e.message, "\nJSON:", jsonStr.substring(0, 300));
+    // Last resort: try to extract individual item objects with regex
+    console.warn(`[tile ${tileIdx}] Parse falhou, tentando extração parcial...`);
+    const matches = raw.matchAll(/"name"\s*:\s*"([^"]+)"[^}]+"price"\s*:\s*"([^"]+)"/g);
+    const items = [];
+    for (const m of matches) {
+      items.push({ name: m[1], price: m[2], original: "", category: "Mercearia", promo: "", bbox: [] });
+    }
+    console.log(`[tile ${tileIdx}] Extração parcial: ${items.length} produtos`);
+    return items;
+  }
+}
+
+async function analyzeTile(tile, mimeType, apiKey) {
+  console.log(`[tile ${tile.index+1}/${tile.total}] Iniciando... (${tile.width}x${tile.height}px)`);
+  const promptText = buildPrompt(tile.index, tile.total, tile.row, tile.col, tile.cols, tile.rows);
+
+  let raw = "";
+  let usedModel = "";
+
+  // Try each model in order until one works
+  for (const model of VISION_MODELS) {
+    try {
+      console.log(`[tile ${tile.index+1}] Tentando modelo: ${model}`);
+      raw = await callGroq(apiKey, model, mimeType, tile.base64, promptText);
+      usedModel = model;
+      console.log(`[tile ${tile.index+1}] Modelo OK: ${model}`);
+      break;
+    } catch(err) {
+      console.warn(`[tile ${tile.index+1}] Modelo ${model} falhou: ${err.message}`);
+      // Wait a bit before trying next model
+      await new Promise(r => setTimeout(r, 600));
+    }
+  }
+
+  if (!raw) {
+    console.error(`[tile ${tile.index+1}] Todos os modelos falharam`);
     return [];
   }
+
+  const items = extractItems(raw, tile.index + 1);
 
   // Crop images for each item
   return Promise.all(items.map(async item => {
