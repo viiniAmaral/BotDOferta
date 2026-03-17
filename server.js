@@ -105,8 +105,13 @@ async function cropProductImage(tileBuffer, tileW, tileH, bbox) {
     const sharp = require("sharp");
     let [x1r, y1r, x2r, y2r] = bbox.map(v => Math.min(1, Math.max(0, Number(v) || 0)));
 
+    console.log(`  [sharp] entrada: [${x1r.toFixed(3)},${y1r.toFixed(3)},${x2r.toFixed(3)},${y2r.toFixed(3)}] tile=${tileW}x${tileH}`);
+
     // Skip zero or near-zero bboxes
-    if ((x2r - x1r) < 0.05 || (y2r - y1r) < 0.05) return null;
+    if ((x2r - x1r) < 0.05 || (y2r - y1r) < 0.05) {
+      console.warn(`  [sharp] bbox muito pequeno, retornando null`);
+      return null;
+    }
 
     // Detect if bbox is pointing to a small price-tag area (narrow height < 20% of image)
     // In Brazilian supermarket flyers, product photos are typically in the top 60% of each card
@@ -138,7 +143,11 @@ async function cropProductImage(tileBuffer, tileW, tileH, bbox) {
 
     const safeW = Math.min(width,  tileW - left);
     const safeH = Math.min(height, tileH - top);
-    if (safeW < 10 || safeH < 10) return null;
+    console.log(`  [sharp] extrato: left=${left} top=${top} w=${safeW} h=${safeH}`);
+    if (safeW < 10 || safeH < 10) {
+      console.warn(`  [sharp] área muito pequena (${safeW}x${safeH}), retornando null`);
+      return null;
+    }
 
     const cropped = await sharp(tileBuffer)
       .extract({ left, top, width: safeW, height: safeH })
@@ -165,7 +174,14 @@ Regras:
 - name: nome real do produto com marca e quantidade. Exemplos: "Arroz Tio Joao 5kg", "Coca-Cola 2L", "Frango Inteiro Sadia 1kg"
 - price: preco promocional em destaque (ex: "R$ 8,99"). Se houver "PAGUE APENAS" ou preco de clube, use esse.
 - original: preco anterior riscado. Se nao visivel, use "".
-- category: uma de Carnes, Aves, Peixes, Frios, Laticinios, Padaria, Graos, Hortifruti, Bebidas, Cervejas, Higiene, Limpeza, Congelados, Mercearia, Outros
+- category: escolha a categoria CORRETA baseada no produto:
+  Carnes (carne bovina/suina/ovina), Aves (frango/peru/pato), Peixes (peixe/frutos do mar),
+  Frios (presunto/salsicha/linguica/mortadela), Laticinios (leite/queijo/iogurte/manteiga/requeijao),
+  Padaria (pao/bolo/biscoito/farinha/macarrao), Graos (arroz/feijao/lentilha/grao-de-bico),
+  Hortifruti (fruta/legume/verdura), Bebidas (suco/refrigerante/agua/cafe/cha),
+  Cervejas (cerveja/chopp), Higiene (sabonete/shampoo/creme dental/papel higienico),
+  Limpeza (detergente/amaciante/desinfetante/saco de lixo/vassoura/esponja),
+  Congelados (produto congelado), Mercearia (outros alimentos), Outros (nao alimenticio)
 - promo: texto de promocao se houver, como "Leve 3 Pague 2". Senao, use "".
 - bbox: [x1, y1, x2, y2] coordenadas proporcionais (0.0 a 1.0) da FOTO/IMAGEM DO PRODUTO (nao do preco, nao do nome — apenas a foto do item). x1,y1 = canto superior esquerdo da foto. x2,y2 = canto inferior direito da foto. Se nao houver foto clara, use [0,0,0,0].
 
@@ -228,7 +244,8 @@ function extractItems(raw, tileIdx) {
     const cleaned = items.filter(i => i.name && i.price).map(i => {
       let name = i.name;
       // Decode unicode escapes like \u00e3 → ã
-      try { name = JSON.parse('"' + name.replace(/"/g, '\\"') + '"'); } catch(_) {}
+      name = name.replace(/\\u([0-9a-fA-F]{4})/g, (_, hex) => String.fromCharCode(parseInt(hex, 16)));
+      name = name.replace(/\u([0-9a-fA-F]{4})/g,   (_, hex) => String.fromCharCode(parseInt(hex, 16)));
       // Remove placeholder text the model sometimes copies literally
       name = name
         .replace(/marca\s*\+?\s*produto\s*\+?\s*quantidade/gi, '')
@@ -284,22 +301,51 @@ async function analyzeTile(tile, mimeType, apiKey) {
   // Crop images for each item
   return Promise.all(items.map(async item => {
     let image = null;
-    if (Array.isArray(item.bbox) && item.bbox.length === 4) {
-      const [x1, y1, x2, y2] = item.bbox;
-      if (x2 > x1 && y2 > y1 && x1 >= 0 && y1 >= 0 && x2 <= 1 && y2 <= 1) {
-        image = await cropProductImage(tile.buffer, tile.width, tile.height, item.bbox);
+    const bbox = item.bbox;
+    console.log(`  [crop] "${item.name}" bbox=${JSON.stringify(bbox)}`);
+
+    if (!Array.isArray(bbox) || bbox.length !== 4) {
+      console.warn(`  [crop] bbox inválido para "${item.name}"`);
+    } else {
+      const [x1, y1, x2, y2] = bbox.map(Number);
+      const w = x2 - x1, h = y2 - y1;
+      console.log(`  [crop] w=${w.toFixed(3)} h=${h.toFixed(3)} tile=${tile.width}x${tile.height}`);
+      if (w > 0.02 && h > 0.02) {
+        image = await cropProductImage(tile.buffer, tile.width, tile.height, bbox);
+        console.log(`  [crop] resultado: ${image ? "✅ imagem gerada (" + image.length + " chars)" : "❌ null"}`);
+      } else {
+        console.warn(`  [crop] bbox muito pequeno (${w.toFixed(3)}x${h.toFixed(3)}), pulando`);
       }
     }
     return { ...item, image };
   }));
 }
 
+function decodeUnicode(str) {
+  if (!str) return str;
+  return str
+    .replace(/\\u([0-9a-fA-F]{4})/g, (_, h) => String.fromCharCode(parseInt(h, 16)))
+    .replace(/\u([0-9a-fA-F]{4})/g,   (_, h) => String.fromCharCode(parseInt(h, 16)));
+}
+
+function normalizeKey(name) {
+  return decodeUnicode(name)
+    .toLowerCase()
+    .normalize("NFD").replace(/[\u0300-\u036f]/g, "") // remove accents
+    .replace(/[^a-z0-9]/g, "")
+    .substring(0, 30);
+}
+
 function dedup(items) {
   const seen = new Map(); const result = [];
   for (const item of items) {
-    const key = item.name.toLowerCase().replace(/[^a-záéíóúàâêôãõç0-9]/g,"").substring(0,25);
-    if (!seen.has(key)) { seen.set(key, result.length); result.push(item); }
-    else {
+    // Decode unicode in name before dedup
+    const decodedName = decodeUnicode(item.name || "").trim();
+    const key = normalizeKey(decodedName);
+    if (!seen.has(key)) {
+      seen.set(key, result.length);
+      result.push({ ...item, name: decodedName });
+    } else {
       const i = seen.get(key);
       if (item.promo && !result[i].promo) result[i].promo = item.promo;
       if (item.image && !result[i].image) result[i].image = item.image;
