@@ -530,6 +530,11 @@ app.delete("/api/markets/:id", async (req, res) => {
   catch (err) { res.status(500).json({ error: err.message }); }
 });
 
+app.delete("/api/items/:id", async (req, res) => {
+  try { await db.run("DELETE FROM items WHERE id=$1", [req.params.id]); res.json({ ok: true }); }
+  catch (err) { res.status(500).json({ error: err.message }); }
+});
+
 app.get("*", (req, res) => res.sendFile(path.join(__dirname, "public", "index.html")));
 
 // ── Start ─────────────────────────────────────────────────────────────────────
