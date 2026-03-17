@@ -124,20 +124,29 @@ async function cropProductImage(tileBuffer, tileW, tileH, bbox) {
 
 function buildPrompt(index, total, row, col, cols, rows) {
   const pos = total > 1
-    ? `Esta é a seção ${index+1} de ${total} de um folheto (linha ${row+1}/${rows}, coluna ${col+1}/${cols}).`
+    ? `Esta é a seção ${index+1} de ${total} de um folheto de supermercado brasileiro (linha ${row+1}/${rows}, coluna ${col+1}/${cols}).`
     : "Este é um folheto de supermercado brasileiro.";
   return `${pos}
 
-INSTRUÇÕES:
-1. Extraia TODOS os produtos com preço visível.
-2. Para cada produto retorne "bbox": [x1,y1,x2,y2] em valores 0.0–1.0.
-3. "price" = preço promocional · "original" = preço riscado · "promo" = ex: "Leve 3 Pague 2"
-4. "name" = marca + produto + gramatura quando visível
-5. "category" = Carnes|Aves|Peixes|Frios|Laticínios|Padaria|Graos|Massas|Hortifruti|Bebidas|Cervejas|Higiene|Limpeza|Congelados|Mercearia|Outros
+TAREFA: Extraia ABSOLUTAMENTE TODOS os produtos que têm preço visível nesta imagem.
+NÃO PARE até listar todos. NÃO pule nenhum produto. Seja EXAUSTIVO.
 
-Retorne APENAS JSON puro sem markdown:
+REGRAS DE EXTRAÇÃO:
+1. PREÇO PROMOCIONAL ("price"): use o preço com maior destaque visual — geralmente após "PAGUE APENAS", "PAGUE SÓ", "R$" em fonte grande, ou preço roxo/colorido. Se houver preço "CLIENTE" menor, use esse.
+2. PREÇO ORIGINAL ("original"): preço riscado ou menor sem destaque — geralmente em fonte menor antes do preço principal. Se não visível, estime +25%.
+3. PROMOÇÃO ("promo"): se houver "LEVE X PAGUE Y", "PACOTE LEVE 4 PAGUE 3", "NO PACK C/12" etc., registre aqui.
+4. NOME ("name"): inclua marca + nome + quantidade/gramatura. Ex: "Esponja Multiuso Limppano 4un", "Arroz Buriti Parboilizado 5kg"
+5. CATEGORIA ("category"): Carnes|Aves|Peixes|Frios|Laticínios|Padaria|Graos|Massas|Hortifruti|Bebidas|Cervejas|Higiene|Limpeza|Congelados|Mercearia|Outros
+6. BBOX ("bbox"): coordenadas [x1,y1,x2,y2] em 0.0–1.0 do card do produto na imagem. Seja preciso.
+
+ATENÇÃO ESPECIAL:
+- Folhetos com "CLUBE/CLIENTE + preço normal" têm DOIS preços: use o preço do clube como "price"
+- Produtos sem preço individual (só imagem decorativa) → IGNORE
+- Cada produto distinto = uma entrada separada no JSON
+
+Retorne APENAS JSON puro sem markdown, sem texto antes ou depois:
 {"items":[{"name":"...","price":"R$ X,XX","original":"R$ X,XX","category":"...","promo":"","bbox":[x1,y1,x2,y2]}]}
-Se não encontrar produtos: {"items":[]}`;
+Se realmente não houver produtos com preço: {"items":[]}`;
 }
 
 async function analyzeTile(tile, mimeType, apiKey) {
@@ -146,7 +155,7 @@ async function analyzeTile(tile, mimeType, apiKey) {
     headers: { "content-type": "application/json", "authorization": `Bearer ${apiKey}` },
     body: JSON.stringify({
       model: "meta-llama/llama-4-scout-17b-16e-instruct",
-      max_tokens: 4096, temperature: 0.05,
+      max_tokens: 8192, temperature: 0.05,
       messages: [
         { role: "system", content: "Especialista em leitura de folhetos de supermercado. Responda sempre com JSON puro." },
         { role: "user", content: [
