@@ -124,58 +124,82 @@ async function cropProductImage(tileBuffer, tileW, tileH, bbox) {
 
 function buildPrompt(index, total, row, col, cols, rows) {
   const pos = total > 1
-    ? `Esta é a seção ${index+1} de ${total} de um folheto de supermercado brasileiro (linha ${row+1}/${rows}, coluna ${col+1}/${cols}).`
-    : "Este é um folheto de supermercado brasileiro.";
+    ? `Seção ${index+1}/${total} de um folheto de supermercado brasileiro.`
+    : "Folheto de supermercado brasileiro.";
   return `${pos}
 
-TAREFA: Extraia ABSOLUTAMENTE TODOS os produtos que têm preço visível nesta imagem.
-NÃO PARE até listar todos. NÃO pule nenhum produto. Seja EXAUSTIVO.
+Liste TODOS os produtos com preço visível. Para folhetos com "PAGUE APENAS" ou preço "CLIENTE", use o menor preço como "price". Inclua marca e gramatura no nome.
 
-REGRAS DE EXTRAÇÃO:
-1. PREÇO PROMOCIONAL ("price"): use o preço com maior destaque visual — geralmente após "PAGUE APENAS", "PAGUE SÓ", "R$" em fonte grande, ou preço roxo/colorido. Se houver preço "CLIENTE" menor, use esse.
-2. PREÇO ORIGINAL ("original"): preço riscado ou menor sem destaque — geralmente em fonte menor antes do preço principal. Se não visível, estime +25%.
-3. PROMOÇÃO ("promo"): se houver "LEVE X PAGUE Y", "PACOTE LEVE 4 PAGUE 3", "NO PACK C/12" etc., registre aqui.
-4. NOME ("name"): inclua marca + nome + quantidade/gramatura. Ex: "Esponja Multiuso Limppano 4un", "Arroz Buriti Parboilizado 5kg"
-5. CATEGORIA ("category"): Carnes|Aves|Peixes|Frios|Laticínios|Padaria|Graos|Massas|Hortifruti|Bebidas|Cervejas|Higiene|Limpeza|Congelados|Mercearia|Outros
-6. BBOX ("bbox"): coordenadas [x1,y1,x2,y2] em 0.0–1.0 do card do produto na imagem. Seja preciso.
+Responda SOMENTE com este JSON (sem markdown):
+{"items":[{"name":"marca + produto + quantidade","price":"R$ X,XX","original":"R$ X,XX","category":"Carnes|Aves|Peixes|Frios|Laticínios|Padaria|Graos|Hortifruti|Bebidas|Cervejas|Higiene|Limpeza|Congelados|Mercearia|Outros","promo":"ex: Leve 4 Pague 3 ou vazio","bbox":[x1,y1,x2,y2]}]}
 
-ATENÇÃO ESPECIAL:
-- Folhetos com "CLUBE/CLIENTE + preço normal" têm DOIS preços: use o preço do clube como "price"
-- Produtos sem preço individual (só imagem decorativa) → IGNORE
-- Cada produto distinto = uma entrada separada no JSON
-
-Retorne APENAS JSON puro sem markdown, sem texto antes ou depois:
-{"items":[{"name":"...","price":"R$ X,XX","original":"R$ X,XX","category":"...","promo":"","bbox":[x1,y1,x2,y2]}]}
-Se realmente não houver produtos com preço: {"items":[]}`;
+bbox = coordenadas do produto em proporção 0.0-1.0 [esquerda,cima,direita,baixo].
+Se não houver produtos: {"items":[]}`;
 }
 
 async function analyzeTile(tile, mimeType, apiKey) {
+  console.log(`[tile ${tile.index+1}/${tile.total}] Enviando para Groq... (${tile.width}x${tile.height}px)`);
+  
+  const body = {
+    model: "meta-llama/llama-4-scout-17b-16e-instruct",
+    max_tokens: 4096,
+    temperature: 0.1,
+    messages: [
+      {
+        role: "user",
+        content: [
+          { type: "image_url", image_url: { url: `data:${mimeType};base64,${tile.base64}` } },
+          { type: "text", text: buildPrompt(tile.index, tile.total, tile.row, tile.col, tile.cols, tile.rows) }
+        ]
+      }
+    ]
+  };
+
   const res = await fetch("https://api.groq.com/openai/v1/chat/completions", {
     method: "POST",
     headers: { "content-type": "application/json", "authorization": `Bearer ${apiKey}` },
-    body: JSON.stringify({
-      model: "meta-llama/llama-4-scout-17b-16e-instruct",
-      max_tokens: 8192, temperature: 0.05,
-      messages: [
-        { role: "system", content: "Especialista em leitura de folhetos de supermercado. Responda sempre com JSON puro." },
-        { role: "user", content: [
-          { type: "image_url", image_url: { url: `data:${mimeType};base64,${tile.base64}` } },
-          { type: "text", text: buildPrompt(tile.index, tile.total, tile.row, tile.col, tile.cols, tile.rows) }
-        ]}
-      ]
-    })
+    body: JSON.stringify(body)
   });
-  if (!res.ok) { const e = await res.json().catch(()=>({})); throw new Error(e?.error?.message||`HTTP ${res.status}`); }
-  const data  = await res.json();
-  const raw   = data.choices?.[0]?.message?.content?.trim() || "{}";
-  const clean = raw.replace(/^```[a-z]*\n?/i,"").replace(/\n?```$/,"").trim();
+
+  if (!res.ok) {
+    const e = await res.json().catch(() => ({}));
+    const msg = e?.error?.message || `HTTP ${res.status}`;
+    console.error(`[tile ${tile.index+1}] ERRO Groq:`, msg);
+    throw new Error(msg);
+  }
+
+  const data = await res.json();
+  const raw  = data.choices?.[0]?.message?.content?.trim() || "";
+  console.log(`[tile ${tile.index+1}] Resposta (${raw.length} chars):`, raw.substring(0, 200));
+
+  if (!raw) { console.warn(`[tile ${tile.index+1}] Resposta vazia`); return []; }
+
+  // Robust JSON extraction: find first { and last }
+  const jsonStart = raw.indexOf("{");
+  const jsonEnd   = raw.lastIndexOf("}");
+  if (jsonStart === -1 || jsonEnd === -1) {
+    console.warn(`[tile ${tile.index+1}] JSON não encontrado na resposta`);
+    return [];
+  }
+  const jsonStr = raw.substring(jsonStart, jsonEnd + 1);
+
   let items = [];
-  try { items = JSON.parse(clean).items || []; } catch(_) { return []; }
+  try {
+    items = JSON.parse(jsonStr).items || [];
+    console.log(`[tile ${tile.index+1}] ✅ ${items.length} produtos extraídos`);
+  } catch(e) {
+    console.error(`[tile ${tile.index+1}] Erro ao parsear JSON:`, e.message, "\nJSON:", jsonStr.substring(0, 300));
+    return [];
+  }
+
+  // Crop images for each item
   return Promise.all(items.map(async item => {
     let image = null;
-    if (item.bbox?.length === 4) {
-      const [x1,y1,x2,y2] = item.bbox;
-      if (x2 > x1 && y2 > y1) image = await cropProductImage(tile.buffer, tile.width, tile.height, item.bbox);
+    if (Array.isArray(item.bbox) && item.bbox.length === 4) {
+      const [x1, y1, x2, y2] = item.bbox;
+      if (x2 > x1 && y2 > y1 && x1 >= 0 && y1 >= 0 && x2 <= 1 && y2 <= 1) {
+        image = await cropProductImage(tile.buffer, tile.width, tile.height, item.bbox);
+      }
     }
     return { ...item, image };
   }));
