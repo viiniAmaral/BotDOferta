@@ -328,7 +328,11 @@ Se nao encontrar: {"bbox":[0,0,0,0]}` }
     const raw  = (data.choices?.[0]?.message?.content || "").trim();
     const s = raw.indexOf("{"), e = raw.lastIndexOf("}");
     if (s === -1 || e === -1) return null;
-    const parsed = JSON.parse(raw.substring(s, e + 1));
+    // Pre-clean stray quotes inside number arrays: 0.708" → 0.708
+    const cleanRaw = raw.substring(s, e + 1)
+      .replace(/(\d)"(\s*[,\]])/g, '$1$2')
+      .replace(/(\d)"(\s*})/g,     '$1$2');
+    const parsed = JSON.parse(cleanRaw);
     const bbox = parsed.bbox;
     if (!Array.isArray(bbox) || bbox.length !== 4) return null;
     const [x1, y1, x2, y2] = bbox.map(Number);
