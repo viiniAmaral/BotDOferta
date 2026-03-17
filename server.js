@@ -228,8 +228,13 @@ function extractItems(raw, tileIdx) {
     return [];
   }
 
+  // Pre-clean: remove stray quotes inside number arrays like [0.1,0.2,0.3"]
+  const cleanedJson = raw.substring(start, end + 1)
+    .replace(/(\d)"(\s*[,\]])/g, '$1$2')   // 0.708" , → 0.708 ,
+    .replace(/(\d)"(\s*})/g,    '$1$2');   // 0.708" } → 0.708 }
+
   try {
-    const parsed = JSON.parse(raw.substring(start, end + 1));
+    const parsed = JSON.parse(cleanedJson);
     const items  = parsed.items || [];
     // Sanitize names - decode unicode escapes and remove placeholder text
     const cleaned = items.filter(i => i.name && i.price).map(i => {
@@ -249,31 +254,47 @@ function extractItems(raw, tileIdx) {
     return cleaned;
   } catch(e) {
     console.warn(`[tile ${tileIdx}] JSON completo falhou (${e.message}), tentando recuperar itens completos...`);
-    // Try to recover complete item objects from truncated/malformed JSON
-    // Match each complete {...} object that has at least name and price
-    const items = [];
-    const itemRe = /\{[^{}]*"name"\s*:\s*"([^"]+)"[^{}]*"price"\s*:\s*"([^"]+)"[^{}]*\}/g;
-    let m;
-    while ((m = itemRe.exec(raw)) !== null) {
+    // Pre-clean stray quotes in bbox arrays, then retry full parse
+    const reClean = raw
+      .replace(/(\d)"(\s*[,\]])/g, '$1$2')
+      .replace(/(\d)"(\s*})/g,    '$1$2');
+    const rStart = reClean.indexOf("{"), rEnd = reClean.lastIndexOf("}");
+    if (rStart !== -1 && rEnd !== -1) {
       try {
-        // Try to parse the full item object
-        const obj = JSON.parse(m[0].replace(/,\s*$/, '').replace(/:\s*,/g, ':"",'));
-        if (obj.name && obj.price) {
-          items.push({
-            name:     obj.name     || "",
-            price:    obj.price    || "",
-            original: obj.original || "",
-            category: obj.category || "Mercearia",
-            promo:    obj.promo    || "",
-            bbox:     Array.isArray(obj.bbox) && obj.bbox.length === 4 ? obj.bbox : [],
-          });
+        const parsed2 = JSON.parse(reClean.substring(rStart, rEnd + 1));
+        const items2  = (parsed2.items || []);
+        if (items2.length > 0) {
+          const cleaned2 = items2.filter(i => i.name && i.price).map(i => ({
+            ...i,
+            name:  decodeUnicode(i.name || "").trim(),
+            bbox:  Array.isArray(i.bbox) && i.bbox.length === 4 ? i.bbox : null,
+          }));
+          console.log(`[tile ${tileIdx}] Re-parse após limpeza: ${cleaned2.length} produtos`);
+          return cleaned2;
         }
-      } catch(_) {
-        // If full object parse fails, use just name+price from regex
-        items.push({ name: m[1], price: m[2], original: "", category: "Mercearia", promo: "", bbox: [] });
-      }
+      } catch(_) {}
     }
-    console.log(`[tile ${tileIdx}] Recuperação: ${items.length} produtos`);
+
+    // Last resort: extract only name+price via regex — bbox will be null → locateProductBbox will run
+    const items = [];
+    const nameRe = /"name"\s*:\s*"([^"]+)"/g;
+    const priceRe = /"price"\s*:\s*"([^"]+)"/g;
+    const catRe   = /"category"\s*:\s*"([^"]+)"/g;
+    const names   = [...raw.matchAll(/"name"\s*:\s*"([^"]+)"/g)].map(m => m[1]);
+    const prices  = [...raw.matchAll(/"price"\s*:\s*"([^"]+)"/g)].map(m => m[1]);
+    const cats    = [...raw.matchAll(/"category"\s*:\s*"([^"]+)"/g)].map(m => m[1]);
+    const len     = Math.min(names.length, prices.length);
+    for (let i = 0; i < len; i++) {
+      items.push({
+        name:     decodeUnicode(names[i] || "").trim(),
+        price:    prices[i] || "",
+        original: "",
+        category: cats[i] || "Mercearia",
+        promo:    "",
+        bbox:     null,  // null = no bbox → locateProductBbox will find it
+      });
+    }
+    console.log(`[tile ${tileIdx}] Recuperação: ${items.length} produtos (bbox=null → locate será chamado)`);
     return items;
   }
 }
